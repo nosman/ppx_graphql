@@ -49,7 +49,7 @@ let select_field typ field_name =
         find_field o.name o.fields
     | Introspection.Interface i ->
         find_field i.name i.fields
-    | Introspection.Union u ->
+    | Introspection.Union _u ->
         failwith "Cannot select field from union"
     | Introspection.Enum _ ->
         failwith "Cannot select field from enum"
@@ -186,16 +186,19 @@ and convert_union ctx query_field possible_types =
   Ast_helper.Exp.match_ [%expr member "__typename" json |> to_string] cases
 
 let generate_parse_fn : Introspection.schema -> Graphql_parser.document -> Parsetree.expression =
-  fun schema [Graphql_parser.Operation op] ->
-    let typ = List.find (match_type_name schema.query_type) schema.types in
-    let ctx = { fragments = StringMap.empty; types = schema.types } in
-    let fields = collect_fields ctx schema.query_type op.selection_set in
-    let methods = resolve_fields ctx typ fields in
-    [%expr fun json ->
-      let open Yojson.Basic.Util in
-      let json = member "data" json in
-      [%e Ast_helper.(Exp.object_ (Cstr.mk (Pat.any ()) methods))]
-    ]
+  fun schema operation ->
+    match operation with
+    | [Graphql_parser.Operation op] ->
+      let typ = List.find (match_type_name schema.query_type) schema.types in
+      let ctx = { fragments = StringMap.empty; types = schema.types } in
+      let fields = collect_fields ctx schema.query_type op.selection_set in
+      let methods = resolve_fields ctx typ fields in
+      [%expr fun json ->
+        let open Yojson.Basic.Util in
+        let json = member "data" json in
+        [%e Ast_helper.(Exp.object_ (Cstr.mk (Pat.any ()) methods))]
+      ]
+    | _ -> failwith "Malformed input" (* TODO: make pattern match exhaustive without wildcard.*)
 
 let accept_none : Parsetree.expression -> (Parsetree.expression -> Parsetree.expression) -> Parsetree.expression =
   fun value expr_fn ->
@@ -231,7 +234,7 @@ let rec schema_typ_to_yojson ?(nullable=true) types typ value =
             scalar_to_yojson s.name
         | Introspection.Enum e ->
             enum_to_yojson e.enum_values
-        | Introspection.InputObject o ->
+        | Introspection.InputObject _o ->
             failwith "Input objects are not supported yet"
         | Introspection.Object _
         | Introspection.Interface _
@@ -255,8 +258,10 @@ let rec input_typ_to_introspection_typ = function
       Introspection.NonNull (input_typ_to_introspection_typ typ')
 
 let generate_variable_fn : Introspection.schema -> Graphql_parser.document -> Parsetree.expression =
-  fun schema [Graphql_parser.Operation op] ->
-    let properties = List.fold_right (fun (arg : Graphql_parser.variable_definition) memo ->
+  fun schema operation ->
+    match operation with
+    | [Graphql_parser.Operation op] -> 
+      let properties = List.fold_right (fun (arg : Graphql_parser.variable_definition) memo ->
         let txt = Longident.Lident arg.name in
         let var = Ast_helper.Exp.ident {txt; loc} in
         let introspection_typ = input_typ_to_introspection_typ arg.typ in
@@ -264,9 +269,9 @@ let generate_variable_fn : Introspection.schema -> Graphql_parser.document -> Pa
         let prop : Parsetree.expression = [%expr ([%e const_string arg.name], [%e expr])] in
         prop::memo
       ) op.variable_definitions [] in
-    let prop_expr_list = exprs_to_list properties in
-    let fn_with_cont : Parsetree.expression = [%expr fun () -> k ((`Assoc [%e prop_expr_list]) : Yojson.Basic.json)] in
-    let fn_with_args = List.fold_right (fun (arg : Graphql_parser.variable_definition) memo ->
+      let prop_expr_list = exprs_to_list properties in
+      let fn_with_cont : Parsetree.expression = [%expr fun () -> k ((`Assoc [%e prop_expr_list]) : Yojson.Basic.json)] in
+      let fn_with_args = List.fold_right (fun (arg : Graphql_parser.variable_definition) memo ->
         let label = match arg.typ with
           | NonNullType _ ->
               Asttypes.Labelled arg.name 
@@ -276,7 +281,8 @@ let generate_variable_fn : Introspection.schema -> Graphql_parser.document -> Pa
         in
         Ast_helper.(Exp.fun_ label None (Pat.var {txt=arg.name; loc}) memo)
       ) op.variable_definitions fn_with_cont
-    in [%expr fun k -> [%e fn_with_args]]
+      in [%expr fun k -> [%e fn_with_args]]
+    | _ -> failwith "Malformed input." (* TODO: make pattern match exhaustive without wildcard. *)
 
 let generate (loc : Location.t) query =
   let schema_path = (Location.absolute_path loc.loc_start.pos_fname |> Filename.dirname) ^ "/schema.json" in
@@ -299,11 +305,11 @@ let mapper _config _cookies =
   { default_mapper with
     expr = fun mapper expr ->
       match expr with
-      | { pexp_desc = Pexp_extension ({ txt = "graphql"; loc}, pstr)} ->
+      | { pexp_desc = Pexp_extension ({ txt = "graphql"; loc}, pstr); _ } ->
           begin match pstr with
             | PStr [{ pstr_desc =
                         Pstr_eval ({ pexp_loc  = loc;
-                                     pexp_desc = Pexp_constant (Pconst_string (query, _))}, _)}] ->
+                                     pexp_desc = Pexp_constant (Pconst_string (query, _)); _ }, _); _ }] ->
                 let query, variable_fn, parse_fn = generate loc query in
                 Ast_helper.Exp.tuple [const_string query; variable_fn; parse_fn]
             | _ ->
