@@ -1,8 +1,7 @@
 (executable
+ (name github)
  (libraries lwt cohttp-lwt-unix uri)
  (preprocess
   (pps ppx_graphql))
  (preprocessor_deps
-  (file schema.json))
- (modules github)
- (name github))
+  (file graphql_config.json)))

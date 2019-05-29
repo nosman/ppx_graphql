@@ -1,12 +1,13 @@
+(* TODO: upgrade parse tree.*)
 open Migrate_parsetree
 open Ast_403
 
 module StringMap = Map.Make(String)
 
-type ctx = {
-  fragments : Graphql_parser.fragment StringMap.t;
-  types : Introspection.typ list;
-}
+type ctx =
+  { fragments : Graphql_parser.fragment StringMap.t
+  ; types : Introspection.typ list
+  }
 
 let loc = !Ast_helper.default_loc
 
@@ -285,8 +286,8 @@ let generate_variable_fn : Introspection.schema -> Graphql_parser.document -> Pa
     | _ -> failwith "Malformed input." (* TODO: make pattern match exhaustive without wildcard. *)
 
 let generate (loc : Location.t) query =
-  let schema_path = (Location.absolute_path loc.loc_start.pos_fname |> Filename.dirname) ^ "/schema.json" in
-  let schema = Introspection.of_file schema_path in
+  let config_path = (Location.absolute_path loc.loc_start.pos_fname |> Filename.dirname) ^ "/graphql_config.json" in
+  let schema = Introspection.of_file config_path in
   match Graphql_parser.parse query with
   | Error err ->
       let msg = Format.sprintf "Invalid GraphQL query: %s" err in
@@ -300,6 +301,7 @@ let generate (loc : Location.t) query =
           )
       with Failure msg -> raise (Location.Error (Location.error ~loc msg))
 
+(* TODO: replace direct pattern matching with ast patterns. *)
 let mapper _config _cookies =
   let default_mapper = Ast_mapper.default_mapper in
   { default_mapper with
@@ -308,8 +310,8 @@ let mapper _config _cookies =
       | { pexp_desc = Pexp_extension ({ txt = "graphql"; loc}, pstr); _ } ->
           begin match pstr with
             | PStr [{ pstr_desc =
-                        Pstr_eval ({ pexp_loc  = loc;
-                                     pexp_desc = Pexp_constant (Pconst_string (query, _)); _ }, _); _ }] ->
+                        Pstr_eval ({ pexp_loc  = loc
+                                   ; pexp_desc = Pexp_constant (Pconst_string (query, _)); _ }, _); _ }] ->
                 let query, variable_fn, parse_fn = generate loc query in
                 Ast_helper.Exp.tuple [const_string query; variable_fn; parse_fn]
             | _ ->
