@@ -287,7 +287,11 @@ let generate_variable_fn : Introspection.schema -> Graphql_parser.document -> Pa
 
 let generate (loc : Location.t) query =
   let config_path = (Location.absolute_path loc.loc_start.pos_fname |> Filename.dirname) ^ "/graphql_config.json" in
-  let schema = Introspection.of_file config_path in
+  (* TODO: better error msg here. *)
+  let schema =
+    match Introspection.schema_of_config config_path with
+    | Ok schema -> schema
+    | Error msg -> failwith msg in
   match Graphql_parser.parse query with
   | Error err ->
       let msg = Format.sprintf "Invalid GraphQL query: %s" err in
